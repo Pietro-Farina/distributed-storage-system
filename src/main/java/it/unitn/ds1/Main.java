@@ -4,6 +4,7 @@ import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 import akka.actor.ActorRef;
 import akka.actor.ActorSystem;
+import it.unitn.ds1.actors.Client;
 import it.unitn.ds1.actors.Node;
 import it.unitn.ds1.logging.AsyncRunLogger;
 import it.unitn.ds1.logging.LogModels;
@@ -53,13 +54,15 @@ public class Main {
         );
         var logger = AsyncRunLogger.start(loggerCfg, meta);
 
+        // Create the Network Manager
+
 
         final ActorSystem system = ActorSystem.create("distributed-storage-system");
 
         // Create nodes and put them to a list
         Map<Integer, ActorRef> network = new TreeMap<>();
         for (int i = 0; i < N_NODES; i++) {
-            int id = i + 10;
+            int id = i * 10;
             network.put(id, system.actorOf(Node.props(id), "node" + id));
         }
 
@@ -69,6 +72,20 @@ public class Main {
             peer.getValue().tell(start, ActorRef.noSender());
         }
 
+        ActorRef client2 = system.actorOf(Client.props(), "client2");
+        ActorRef client1 = system.actorOf(Client.props(), "client1");
+        ActorRef client3 = system.actorOf(Client.props(), "client3");
+
+        ActorRef client4 = system.actorOf(Client.props(), "client4");
+        client1.tell(new Messages.StartUpdateMSg(12, "CCCCCCCCCCCC", network.get(10)), ActorRef.noSender());
+        client2.tell(new Messages.StartUpdateMSg(25, "BBBBBBBBBBBB", network.get(20)), ActorRef.noSender());
+        client2.tell(new Messages.StartUpdateMSg(12, "AAAAAAAAAA", network.get(10)), ActorRef.noSender());
+        client3.tell(new Messages.StartGetMsg(12, network.get(20)), ActorRef.noSender());
+        client4.tell(new Messages.StartGetMsg(1, network.get(10)), ActorRef.noSender());
+
+        client1.tell(new Messages.QueueUpdateMsg(12, "CCCCCCCCCCCC", network.get(10)), ActorRef.noSender());
+        client1.tell(new Messages.QueueUpdateMsg(25, "BBBBBBBBBBBB", network.get(20)), ActorRef.noSender());
+        client1.tell(new Messages.QueueUpdateMsg(30, "AAAAAAAAAA", network.get(10)), ActorRef.noSender());
         // system shutdown
         system.terminate();
     }

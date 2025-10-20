@@ -138,7 +138,7 @@ public class Node extends AbstractActor {
         // guard at coordinator (optional but recommended)
         // TODO write reasons of guard at coordinator
         if (!acquireCoordinatorGuard(dataKey)) {
-            getSender().tell(new Messages.ErrorMsg(), self());
+            getSender().tell(new Messages.ErrorMsg("COORDINATOR BUSY ON THAT KEY"), self());
             return;
         }
 
@@ -218,7 +218,8 @@ public class Node extends AbstractActor {
     }
 
     private void finishUpdateSuccess(Operation operation) {
-        final int chosenVersion = operation.chosenVersion.getVersion() + 1;
+        final int chosenVersion = operation.chosenVersion == null ? 1 :
+                operation.chosenVersion.getVersion() + 1;
         DataItem committedDataItem = new DataItem(operation.proposedValue, chosenVersion);
 
         // local commit if we are a replica
@@ -250,7 +251,7 @@ public class Node extends AbstractActor {
         }
 
         // send the error to the client
-        operation.client.tell(new Messages.ErrorMsg(), self());
+        operation.client.tell(new Messages.ErrorMsg(reason), self());
 
         // cleanup: free locks and cancel timer
         cleanup(operation);
@@ -258,7 +259,7 @@ public class Node extends AbstractActor {
 
     private void startGetAsCoordinator(int dataKey) {
         if (!acquireCoordinatorGuard(dataKey)) {
-            getSender().tell(new Messages.ErrorMsg(), self());
+            getSender().tell(new Messages.ErrorMsg("COORDINATOR BUSY ON THAT KEY"), self());
         }
         Set<Integer> responsibleNodesKeys = getResponsibleNodesKeys(dataKey);
         int R = 2, T = 1000; // TODO get replication params from config
@@ -341,7 +342,9 @@ public class Node extends AbstractActor {
     }
 
     private void finishGetSuccess(Operation operation) {
-        final DataItem chosenVersion = operation.chosenVersion;
+        final DataItem chosenVersion = operation.chosenVersion == null ?
+                new DataItem(null, 0) :
+                operation.chosenVersion;
 
         // reply to client
         Messages.GetResultMsg resultMsg = new Messages.GetResultMsg(
@@ -354,7 +357,7 @@ public class Node extends AbstractActor {
 
     private void finishGetFail(Operation operation, String reason) {
         // send the error to the client
-        operation.client.tell(new Messages.ErrorMsg(), self());
+        operation.client.tell(new Messages.ErrorMsg(reason), self());
 
         // cleanup: free locks and cancel timer
         cleanup(operation);
@@ -375,7 +378,7 @@ public class Node extends AbstractActor {
      * TODO operation == null SHOULD never happen BECAUSE WE CANCEL THE TIMEOUT
      * @param timeout containing {operationUid, dataKey}
      */
-    public void onTimeout(Messages.Timeout timeout) {
+    private void onTimeout(Messages.Timeout timeout) {
         Operation operation = coordinatorOperations.get(timeout.operationUid);
 
         if (this.id == timeout.operationUid.coordinatorId()) { // I am the coordinator for this

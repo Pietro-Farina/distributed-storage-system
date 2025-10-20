@@ -18,6 +18,50 @@ public class Messages {
         }
     }
 
+    public static class StartUpdateMSg implements Serializable {
+        public final int dataKey;
+        public final String value;
+        public final ActorRef node;
+
+        public StartUpdateMSg(int dataKey, String value, ActorRef node) {
+            this.dataKey = dataKey;
+            this.value = value;
+            this.node = node;
+        }
+    }
+
+    public static class StartGetMsg implements Serializable {
+        public final int dataKey;
+        public final ActorRef node;
+
+        public StartGetMsg(int dataKey, ActorRef node) {
+            this.dataKey = dataKey;
+            this.node = node;
+        }
+    }
+
+    public static class QueueUpdateMsg implements Serializable {
+        public final int dataKey;
+        public final String value;
+        public final ActorRef node;
+
+        public QueueUpdateMsg(int dataKey, String value, ActorRef node) {
+            this.dataKey = dataKey;
+            this.value = value;
+            this.node = node;
+        }
+    }
+
+    public static class QueueGetMsg implements Serializable {
+        public final int dataKey;
+        public final ActorRef node;
+
+        public QueueGetMsg(int dataKey, ActorRef node) {
+            this.dataKey = dataKey;
+            this.node = node;
+        }
+    }
+
     public static class UpdateRequestMsg implements Serializable {
         public final int dataKey;
         public final String value;
@@ -107,13 +151,13 @@ public class Messages {
 
     public static class GetResultMsg implements Serializable {
         public final int clientOperationNumber;
-        public final int key;
+        public final int dataKey;
         public final DataItem value;
 
         public GetResultMsg(int clientOperationNumber,
-                               int key, DataItem value) {
+                            int dataKey, DataItem value) {
             this.clientOperationNumber = clientOperationNumber;
-            this.key = key;
+            this.dataKey = dataKey;
             this.value = value;
         }
     }
@@ -127,8 +171,11 @@ public class Messages {
     }
 
     public static class ErrorMsg implements Serializable {
+        public final String reason;
 
-        public ErrorMsg() {}
+        public ErrorMsg(String reason) {
+            this.reason = reason;
+        }
     }
 
     public static class Timeout implements Serializable {

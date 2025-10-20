@@ -385,7 +385,7 @@ public class TwoPhaseCommit {
 // On request completion → summary row
       logger.summary(new LogModels.Summary(
               "tsStartIso", "tsEndIso", reqId, selfNodeId, "WRITE", key, 4,
-              true, 30000, "ownersStr", 4, 3, 3, 10
+              true, Long.getLong("1000"), "ownersStr", 4, 3, 3, 10
       ));
 
       logger.error("Coordinator failed", null);
