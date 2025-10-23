@@ -4,6 +4,9 @@ import akka.actor.ActorRef;
 import akka.actor.AbstractActor;
 import akka.actor.ActorSystem;
 import akka.actor.Props;
+import it.unitn.ds1.logging.AsyncRunLogger;
+import it.unitn.ds1.logging.LogModels;
+import it.unitn.ds1.logging.LoggerConfig;
 import scala.concurrent.duration.Duration;
 
 import java.io.Serializable;
@@ -23,7 +26,7 @@ public class TwoPhaseCommit {
   final static int DECISION_TIMEOUT = 2000;  // timeout for the decision, ms
 
   // the votes that the participants will send (for testing)
-  final static Vote[] predefinedVotes = 
+  final static Vote[] predefinedVotes =
     new Vote[] {Vote.YES, Vote.YES, Vote.YES}; // as many as N_PARTICIPANTS
 
   // Start message that sends the list of participants to everyone
@@ -89,7 +92,7 @@ public class TwoPhaseCommit {
 
       // setting a timer to "recover"
       getContext().system().scheduler().scheduleOnce(
-          Duration.create(recoverIn, TimeUnit.MILLISECONDS),  
+          Duration.create(recoverIn, TimeUnit.MILLISECONDS),
           getSelf(),
           new Recovery(), // message sent to myself
           getContext().system().dispatcher(), getSelf()
@@ -117,7 +120,7 @@ public class TwoPhaseCommit {
     // schedule a Timeout message in specified time
     void setTimeout(int time) {
       getContext().system().scheduler().scheduleOnce(
-          Duration.create(time, TimeUnit.MILLISECONDS),  
+          Duration.create(time, TimeUnit.MILLISECONDS),
           getSelf(),
           new Timeout(), // the message to send
           getContext().system().dispatcher(), getSelf()
@@ -203,7 +206,7 @@ public class TwoPhaseCommit {
     public void onVoteResponse(VoteResponse msg) {                    /* Vote */
       if (hasDecided()) {
 
-        // we have already decided and sent the decision to the group, 
+        // we have already decided and sent the decision to the group,
         // so do not care about other votes
         return;
       }
@@ -216,7 +219,7 @@ public class TwoPhaseCommit {
           multicast(new DecisionResponse(decision));
           //multicastAndCrash(new DecisionResponse(decision), 3000);
         }
-      } 
+      }
       else { // a NO vote
 
         // on a single NO we decide ABORT
@@ -325,7 +328,72 @@ public class TwoPhaseCommit {
   /*-- Main ------------------------------------------------------------------*/
   public static void main(String[] args) {
 
-    // Create the actor system
+      // Initialize once at run start (Main / SimulationRunner)
+      var cfg = new LoggerConfig.Builder()
+              .runTag("setupLogger")
+              .baseDir(java.nio.file.Paths.get("data","runs"))
+              .eventDetail(LoggerConfig.EventDetail.NORMAL) // NONE|MINIMAL|NORMAL|VERBOSE
+              .summaryEnabled(true)
+              .eventSample(1.0)          // reduce (e.g., 0.1) for high QPS
+              .batchSize(1024)
+              .flushEvery(java.time.Duration.ofMillis(20))
+              .logToConsole(false)
+              .build();
+
+      var meta = new LogModels.Metadata(
+              java.time.Instant.now().toString(),
+              "test1",      // not used; kept for completeness
+              cfg.runTag,
+              4, 3, 3, 10,                  // your run params
+              10, 10, 4242,
+              System.getProperty("java.version")
+      );
+
+      var logger = AsyncRunLogger.start(cfg, meta);
+
+      String reqId = "1";
+      String selfNodeId = "2";
+      String runId = "runId";
+      String nodeId = "nodeId";
+      String operation = "operation";
+      Integer key = 1;
+      Integer version = 2;
+      Long latencyMs = 300L;
+      String phase = "phase";
+      Boolean success = true;
+
+
+      // In coordinator hot path (tiny overhead)
+      logger.event(new LogModels.Event(
+              logger.runId(), reqId, selfNodeId,
+              "WRITE", key, null, "COORD_START", null, null
+      ));
+
+// On replica ACK
+      logger.event(new LogModels.Event(
+              logger.runId(), reqId, "replicaId",
+              "REPLICA_ACK", key, version,
+              "APPLY_OK", latencyMs, success
+      ));
+
+      logger.event(new LogModels.Event(
+              logger.runId(), reqId, "replicaId",
+              "REPLICA_ACK", key, version,
+              "APPLY_OK", latencyMs, success
+      ));
+
+// On request completion → summary row
+      logger.summary(new LogModels.Summary(
+              "tsStartIso", "tsEndIso", reqId, selfNodeId, "WRITE", key, 4,
+              true, 30000, "ownersStr", 4, 3, 3, 10
+      ));
+
+      logger.error("Coordinator failed", null);
+
+      logger.close(); // also auto-flushed by shutdown hook
+
+
+      // Create the actor system
     final ActorSystem system = ActorSystem.create("helloakka");
 
     // Create the coordinator
@@ -349,7 +417,7 @@ public class TwoPhaseCommit {
     try {
       System.out.println(">>> Press ENTER to exit <<<");
       System.in.read();
-    } 
+    }
     catch (IOException ignored) {}
     system.terminate();
   }
