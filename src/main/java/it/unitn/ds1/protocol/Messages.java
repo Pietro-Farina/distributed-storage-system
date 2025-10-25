@@ -162,6 +162,46 @@ public class Messages {
         }
     }
 
+    public static class StartJoinMsg implements Serializable {
+        public final int newNodeKey;
+        public final ActorRef bootstrapNode;
+
+        public StartJoinMsg(int newNodeKey, ActorRef bootstrapNode) {
+            this.newNodeKey = newNodeKey;
+            this.bootstrapNode = bootstrapNode;
+        }
+    }
+
+    public static class BootstrapMsg implements Serializable {
+        public final int newNodeKey;
+        public final NavigableMap<Integer, ActorRef> network;
+
+        public BootstrapMsg(int newNodeKey, NavigableMap<Integer, ActorRef> network) {
+            this.newNodeKey = newNodeKey;
+            this.network = network;
+        }
+    }
+
+    public static class RequestDataMsg implements Serializable {
+        public final int newNodeKey;
+        public final Map<Integer, DataItem> requestedData;
+
+        public RequestDataMsg(int newNodeKey, Map<Integer, DataItem> requestedData) {
+            this.newNodeKey = newNodeKey;
+            this.requestedData = requestedData;
+        }
+    }
+
+    public static class AnnounceNodeMsg implements Serializable {
+        public final int newNodeKey;
+        public final ActorRef node;
+
+        public AnnounceNodeMsg(int newNodeKey, ActorRef node) {
+            this.newNodeKey = newNodeKey;
+            this.node = node;
+        }
+    }
+
     public static class Error implements Serializable {
         public final int clientOperationNumber;
 

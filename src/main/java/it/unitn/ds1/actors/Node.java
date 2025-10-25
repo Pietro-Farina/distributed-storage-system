@@ -95,6 +95,11 @@ public class Node extends AbstractActor {
         }
     }
 
+    /**
+     * TODO: What if we timeout and then it arrives? We should accept the data but we might have given the lock to another resource. TIMEOUT should be > round trip time
+     * TODO: What if the timeout time is the start of the timeout
+     * @param updateResultMsg
+     */
     private void onUpdateResultMsg(Messages.UpdateResultMsg updateResultMsg) {
         // Commit the update
         storage.put(updateResultMsg.dataKey, updateResultMsg.value);
@@ -104,7 +109,7 @@ public class Node extends AbstractActor {
 
         // Cancel the timer - to avoid stale timeout
         Cancellable timer = lockTimers.remove(updateResultMsg.operationUid);
-        if (timer != null) { timer.cancel(); } // should always be not null
+        if (timer != null) { timer.cancel(); } // should always be not null?
     }
 
     private void onGetRequestMsg(Messages.GetRequestMsg getRequestMsg) {
@@ -404,6 +409,44 @@ public class Node extends AbstractActor {
             // Free the write lock
             releaseReplicaLock(timeout.dataKey);
         }
+    }
+
+    private void onStartJoinMsg(Messages.StartJoinMsg startJoinMsg) {
+        // the node is already in the network
+        if (network.containsKey(startJoinMsg.newNodeKey)) {
+            return;
+        }
+
+        // I am the joining node
+        if (self() != startJoinMsg.bootstrapNode) {
+            // Wrong ID
+            if (this.id != startJoinMsg.newNodeKey) {
+                return;
+            }
+
+            // TODO should I start here the timeout?
+            // create the operation
+            OperationUid operationUid = nextOperationUid();
+            Operation operation = new Operation(
+                    -1,
+                    new HashSet<>(),
+                    replicationParameters.R,
+                    getSender(),
+                    "JOIN",
+                    null,
+                    operationUid
+            );
+            coordinatorOperations.put(operationUid, operation);
+
+            // send the request to the targeted node
+            Messages.BootstrapMsg bootstrapMsg = new Messages.BootstrapMsg(
+                    startJoinMsg.newNodeKey,
+                    null);
+            startJoinMsg.bootstrapNode.tell(bootstrapMsg, self());
+
+            operation.timer = scheduleTimeout(replicationParameters.T, operationUid, -1);
+        }
+
     }
 
 
