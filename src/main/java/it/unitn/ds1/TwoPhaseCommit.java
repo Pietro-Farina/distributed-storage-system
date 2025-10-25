@@ -354,7 +354,7 @@ public class TwoPhaseCommit {
       String reqId = "1";
       String selfNodeId = "2";
       String runId = "runId";
-      String nodeId = "nodeId";
+      String nodeId = "coordinatorId";
       String operation = "operation";
       Integer key = 1;
       Integer version = 2;
@@ -385,7 +385,7 @@ public class TwoPhaseCommit {
 // On request completion → summary row
       logger.summary(new LogModels.Summary(
               "tsStartIso", "tsEndIso", reqId, selfNodeId, "WRITE", key, 4,
-              true, 30000, "ownersStr", 4, 3, 3, 10
+              true, Long.getLong("1000"), "ownersStr", 4, 3, 3, 10
       ));
 
       logger.error("Coordinator failed", null);

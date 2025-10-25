@@ -4,19 +4,20 @@ import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 import akka.actor.ActorRef;
 import akka.actor.ActorSystem;
+import it.unitn.ds1.actors.Client;
 import it.unitn.ds1.actors.Node;
 import it.unitn.ds1.logging.AsyncRunLogger;
 import it.unitn.ds1.logging.LogModels;
 import it.unitn.ds1.logging.LoggerConfig;
+import it.unitn.ds1.protocol.Messages;
 import it.unitn.ds1.utils.ApplicationConfig;
 
-import java.util.TreeMap;
-import java.util.Map;
+import java.util.*;
 
 public class Main {
     final static int N_NODES = 4;
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws InterruptedException {
         // Loads application.conf (+ application-{env}.conf overrides if present)
         // Note that they can be override by command-line, e.g.:
         // -Dds1.replication.N=5 -Dds1.log.eventDetail=NORMAL
@@ -29,6 +30,9 @@ public class Main {
                 cfg.ring.keySpace, cfg.delays.delayMinMs, cfg.delays.delayMaxMs,
                 cfg.paths.runsDir, cfg.log.runTag, cfg.log.eventDetail, cfg.log.summaryEnabled, cfg.log.logToConsole
         );
+
+        // Random Generator
+        Random rand = new Random(cfg.random.seed);
 
         // Initialize logger in (main or SimulationRunner)
         var loggerCfg = new LoggerConfig.Builder()
@@ -52,23 +56,30 @@ public class Main {
         );
         var logger = AsyncRunLogger.start(loggerCfg, meta);
 
+        // Create the Network Manager
+        NetworkManager networkManager = new NetworkManager(cfg);
 
-        final ActorSystem system = ActorSystem.create("distributed-storage-system");
-
-        // Create nodes and put them to a list
-        Map<Integer, ActorRef> network = new TreeMap<>();
-        for (int i = 0; i < N_NODES; i++) {
-            int id = i + 10;
-            network.put(id, system.actorOf(Node.props(id), "node" + id));
+        // Generate N node keys (spread on the ring)
+        int nNodes = 8;
+        List<Integer> nodeKeysToAdd = new ArrayList<>();
+        for (int i = 0; i < nNodes; i++) {
+            nodeKeysToAdd.add((i + 1) * 10); // 10, 20, 30, ...
         }
 
-        // Send join messages to the nodes to inform them of the whole network
-        Messages.JoinNetworkMsg start = new Messages.JoinNetworkMsg(network);
-        for (Map.Entry<Integer, ActorRef> peer : network.entrySet()) {
-            peer.getValue().tell(start, ActorRef.noSender());
+        // Generate M random data entries
+        int nDataItems = 25;
+        Map<Integer, String> dataToAdd = new LinkedHashMap<>();
+        String[] sampleValues = {"iron", "copper", "water", "oxygen", "nickel", "rock", "dust"};
+
+        for (int i = 0; i < nDataItems; i++) {
+            int key = rand.nextInt(100);                  // key in [0,100)
+            String value = sampleValues[rand.nextInt(sampleValues.length)];
+            dataToAdd.put(key, value + "_" + key);        // e.g., "iron_57"
         }
 
-        // system shutdown
-        system.terminate();
+        networkManager.initializeNetwork(nodeKeysToAdd, dataToAdd, true);
+        Thread.sleep(5000);
+
+        networkManager.terminate();
     }
 }

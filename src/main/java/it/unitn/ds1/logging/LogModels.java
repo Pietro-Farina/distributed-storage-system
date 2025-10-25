@@ -38,7 +38,7 @@ public class LogModels {
                     .append("\"ts\":").append(quote(ts)).append(',')
                     .append("\"runId\":").append(quote(runId)).append(',')
                     .append("\"reqId\":").append(quote(reqId)).append(',')
-                    .append("\"nodeId\":").append(quote(nodeId)).append(',')
+                    .append("\"coordinatorId\":").append(quote(nodeId)).append(',')
                     .append("\"operation\":").append(quote(operation)).append(',')
                     .append("\"key\":").append(key==null?"null":key).append(',')
                     .append("\"version\":").append(version==null?"null":version).append(',')
