@@ -193,10 +193,12 @@ public class Messages {
     public static class RequestDataMsg implements Serializable {
         public final OperationUid joiningOperationUid;
         public final int newNodeKey;
+        public final boolean isRecover;
 
-        public RequestDataMsg(OperationUid joiningOperationUid, int newNodeKey) {
+        public RequestDataMsg(OperationUid joiningOperationUid, int newNodeKey, boolean isRecover) {
             this.joiningOperationUid = joiningOperationUid;
             this.newNodeKey = newNodeKey;
+            this.isRecover = isRecover;
         }
     }
 
@@ -273,6 +275,18 @@ public class Messages {
         public LeaveCommitMsg(int leavingNodeKey, OperationUid leavingOperationUid) {
             this.leavingNodeKey = leavingNodeKey;
             this.leavingOperationUid = leavingOperationUid;
+        }
+    }
+
+    public static class CrashMsg implements Serializable {
+        public CrashMsg(){}
+    }
+
+    public static class StartRecoveryMsg implements Serializable {
+        public final ActorRef bootstrapNode;
+
+        public StartRecoveryMsg(ActorRef bootstrapNode) {
+            this.bootstrapNode = bootstrapNode;
         }
     }
 

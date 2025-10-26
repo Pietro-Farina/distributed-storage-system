@@ -274,6 +274,7 @@ public class Node extends AbstractActor {
     private void startGetAsCoordinator(int dataKey) {
         if (!acquireCoordinatorGuard(dataKey)) {
             getSender().tell(new Messages.ErrorMsg("COORDINATOR BUSY ON THAT KEY"), self());
+            return;
         }
         Set<Integer> responsibleNodesKeys = getResponsibleNodesKeys(network, dataKey, replicationParameters.N);
         OperationUid operationUid = nextOperationUid();
@@ -408,6 +409,8 @@ public class Node extends AbstractActor {
                 finishJoinFail(operation.operationUid);
             } else if (operation.operationType.equals("LEAVE")) {
                 finishLeaveFail(operation);
+            } else if (operation.operationType.equals("RECOVER")) {
+                finishRecoverFail(operation.operationUid);
             }
 
         } else { // I am a node
@@ -418,7 +421,8 @@ public class Node extends AbstractActor {
             }
             timer.cancel();
             // Free the write lock
-            releaseReplicaLock(timeout.dataKey);
+            if (timeout.dataKey >= 0)
+                releaseReplicaLock(timeout.dataKey);
         }
     }
 
@@ -461,7 +465,7 @@ public class Node extends AbstractActor {
 
     /**
      * Only bootstrap nodes answer this
-     * @param bootstrapRequestMsg from Joining Node
+     * @param bootstrapRequestMsg from Joining/Recovering Node
      */
     private void onBootstrapRequestMsg(Messages.BootstrapRequestMsg bootstrapRequestMsg) {
         // Sending the node in the network
@@ -473,12 +477,13 @@ public class Node extends AbstractActor {
     }
 
     /**
-     * Only joining node answer this
+     * Only joining node and recovery node answer this
      * It could be a stale message
      * @param bootstrapResponseMsg from Bootstrap Node
      */
     private void onBootstrapResponseMsg(Messages.BootstrapResponseMsg bootstrapResponseMsg) {
-        if (!coordinatorOperations.containsKey(bootstrapResponseMsg.joiningOperationUid))
+        Operation operation =  coordinatorOperations.get(bootstrapResponseMsg.joiningOperationUid);
+        if (operation == null)
             return; // stale message
 
         this.network.clear();
@@ -491,18 +496,26 @@ public class Node extends AbstractActor {
         // Request the node I will have to store to the following node in the ring
         Messages.RequestDataMsg requestMsg = new Messages.RequestDataMsg(
                 bootstrapResponseMsg.joiningOperationUid,
-                this.id
+                this.id,
+                operation.operationType.equals("RECOVER")
         );
         successorNode.tell(requestMsg, self());
     }
 
     /**
-     * Any node in the network can receive this request from a Joining Node.
-     * @param requestDataMsg from Joining Node
+     * Any node in the network can receive this request from a Joining Node or a Recovering Node.
+     * @param requestDataMsg from Joining/Recovering Node
      */
     private void onRequestDataMsg(Messages.RequestDataMsg requestDataMsg) {
         // Send only the data the joining node has to store
-        Map<Integer, DataItem> requestedData = computeItemsForJoiner(requestDataMsg.newNodeKey);
+        Map<Integer, DataItem> requestedData;
+        if (requestDataMsg.isRecover) {
+            // RECOVER: compute with the CURRENT ring (do NOT add the node)
+            requestedData = computeItemsForNode(requestDataMsg.newNodeKey, network);
+        } else {
+            // JOIN: compute with ring + new node
+            requestedData = computeItemsForJoiner(requestDataMsg.newNodeKey);
+        }
         Messages.ResponseDataMsg responseMsg = new Messages.ResponseDataMsg(
                 requestDataMsg.joiningOperationUid,
                 requestedData,
@@ -512,26 +525,30 @@ public class Node extends AbstractActor {
     }
 
     /**
-     * Only joining node answer this.
+     * Only joining or recovering node answer this.
      * It could be a stale message.
-     * @param responseDataMsg from Successor Node of the Joining Node
+     * @param responseDataMsg from Successor Node of the Joining/Recovering Node
      */
     private void onResponseDataMsg(Messages.ResponseDataMsg responseDataMsg) {
-        if (!coordinatorOperations.containsKey(responseDataMsg.joiningOperationUid))
+        Operation operation =  coordinatorOperations.get(responseDataMsg.joiningOperationUid);
+        if (operation == null)
             return; // stale message
 
         // We have the check on N == 1 as in startReadingPhase we ping the other nodes in the network and wait for their answer
         if (replicationParameters.N == 1 || responseDataMsg.requestedData.isEmpty()) {
             storage.putAll(responseDataMsg.requestedData); // save the possible data in the storage
-            finishJoinSuccess(responseDataMsg.joiningOperationUid); // trivial case
+            if (operation.operationType.equals("JOIN"))
+                finishJoinSuccess(responseDataMsg.joiningOperationUid); // trivial case
+            else
+                finishRecoverSuccess(responseDataMsg.joiningOperationUid);
             return;
         }
         startReadingPhase(responseDataMsg); // R-quorum on each key
     }
 
     /**
-     * Any node in the network can receive this request from a Joining Node.
-     * @param readDataRequestMsg from Joining Node
+     * Any node in the network can receive this request from a Joining/Recovering Node.
+     * @param readDataRequestMsg from Joining/Recovering Node
      */
     private void onReadDataRequestMsg(Messages.ReadDataRequestMsg readDataRequestMsg) {
         final List <KeyDataOperationRef> requestedData = new ArrayList<>();
@@ -553,9 +570,9 @@ public class Node extends AbstractActor {
     }
 
     /**
-     * Only joining node answer this.
+     * Only Joining/Recovering node answer this.
      * It could be a stale message.
-     * @param readDataResponseMsg from a Node that contains items which the Joining Node has to store
+     * @param readDataResponseMsg from a Node that contains items which the Joining/Recovering Node has to store
      */
     private void onReadDataResponseMsg(Messages.ReadDataResponseMsg readDataResponseMsg) {
         // Get joining operation
@@ -603,9 +620,17 @@ public class Node extends AbstractActor {
         }
 
         if (joiningOperation.quorumTracker.hasQuorum()) {
-            finishJoinSuccess(readDataResponseMsg.joiningOperationUid);
+            if (joiningOperation.operationType.equals("JOIN")) {
+                finishJoinSuccess(readDataResponseMsg.joiningOperationUid);
+            } else {
+                finishRecoverSuccess(readDataResponseMsg.joiningOperationUid);
+            }
         } else {
-            finishJoinFail(readDataResponseMsg.joiningOperationUid);
+            if (joiningOperation.operationType.equals("JOIN")) {
+                finishJoinFail(readDataResponseMsg.joiningOperationUid);
+            } else {
+                finishRecoverFail(readDataResponseMsg.joiningOperationUid); // mirror of join fail (stop or retry policy)
+            }
         }
     }
 
@@ -886,6 +911,59 @@ public class Node extends AbstractActor {
         coordinatorOperations.remove(leavingOperation.operationUid);
     }
 
+    private void onStartRecoveryMsg(Messages.StartRecoveryMsg startRecoveryMsg) {
+        OperationUid operationUid = nextOperationUid();
+        Operation recoveryOperation = new Operation(
+                -1,
+                new HashSet<>(),
+                -1,
+                getSender(),
+                "RECOVER",
+                null,
+                operationUid
+        );
+        coordinatorOperations.put(operationUid, recoveryOperation);
+
+        // send Bootstrap Request
+        Messages.BootstrapRequestMsg bootstrapRequestMsg = new Messages.BootstrapRequestMsg(
+                operationUid
+        );
+        startRecoveryMsg.bootstrapNode.tell(bootstrapRequestMsg, self());
+
+        // start timer
+        recoveryOperation.timer = scheduleTimeout(replicationParameters.T, operationUid, -1);
+    }
+
+    private void finishRecoverSuccess(OperationUid operationUid) {
+        Operation operation = coordinatorOperations.remove(operationUid);
+        if (operation != null && operation.timer != null)
+            operation.timer.cancel();
+
+        // Drop keys I no longer own under the CURRENT ring
+        for (Integer k : computeItemsKeysToDrop())
+            storage.remove(k);
+
+        // Get available to other request
+        getContext().become(createReceive());
+    }
+
+    private void finishRecoverFail(OperationUid operationUid) {
+        Operation operation = coordinatorOperations.remove(operationUid);
+        if (operation != null && operation.timer != null)
+            operation.timer.cancel();
+
+        // Clear all maps and variables
+        coordinatorOperations.clear();
+        storage.clear();
+        network.clear();
+        // TODO write error msg
+    }
+
+    private void onCrashMsg(Messages.CrashMsg crashMsg) {
+        // this node become unavailable
+        getContext().become(crashed());
+    }
+
     /* ------------ HELPERS FUNCTIONS ------------ */
 
     private boolean acquireCoordinatorGuard(int dataKey) {
@@ -952,6 +1030,16 @@ public class Node extends AbstractActor {
         return cur;
     }
 
+    private Map<Integer, DataItem> computeItemsForNode(int nodeKey, NavigableMap<Integer, ActorRef> ring) {
+        final Map<Integer, DataItem> map = new HashMap<>();
+        for (var e : storage.entrySet()) {
+            if (getResponsibleNodesKeys(ring, e.getKey(), replicationParameters.N).contains(nodeKey)) {
+                map.put(e.getKey(), e.getValue());
+            }
+        }
+        return map;
+    }
+
     /**
      * It is a dumb way to compute this O(network.size * storage), there are faster ways
      * by computing the intervals for each data key
@@ -962,15 +1050,7 @@ public class Node extends AbstractActor {
         // Simulate the new ring
         final NavigableMap<Integer, ActorRef> newRing = new TreeMap<>(network);
         newRing.put(nodeKey, null);
-
-        final Map<Integer, DataItem> map = new HashMap<>();
-        for (Map.Entry<Integer, DataItem> entry : storage.entrySet()) {
-            if (getResponsibleNodesKeys(newRing, entry.getKey(), newRing.size()).contains(nodeKey)) {
-                map.put(entry.getKey(), entry.getValue());
-            }
-        }
-
-        return map;
+        return computeItemsForNode(nodeKey, newRing);
     }
 
     /**
@@ -1007,6 +1087,16 @@ public class Node extends AbstractActor {
                 .match(Messages.ReadDataRequestMsg.class, this::onReadDataRequestMsg)
                 .match(Messages.ReadDataResponseMsg.class, this::onReadDataResponseMsg)
                 .match(Messages.AnnounceNodeMsg.class, this::onAnnounceNodeMsg)
+                .match(Messages.CrashMsg.class, this::onCrashMsg)
+                .build();
+    }
+
+    public Receive crashed() {
+        return receiveBuilder()
+                .match(Messages.StartRecoveryMsg.class, this::onStartRecoveryMsg)
+                .match(Messages.BootstrapResponseMsg.class, this::onBootstrapResponseMsg)
+                .match(Messages.ResponseDataMsg.class, this::onResponseDataMsg)
+                .match(Messages.ReadDataResponseMsg.class, this::onReadDataResponseMsg)
                 .build();
     }
 }
