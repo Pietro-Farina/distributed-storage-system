@@ -10,6 +10,7 @@ import it.unitn.ds1.utils.ApplicationConfig;
 import it.unitn.ds1.utils.OperationUid;
 import scala.concurrent.duration.Duration;
 
+import javax.xml.crypto.Data;
 import java.io.Serializable;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
@@ -38,6 +39,9 @@ public class Node extends AbstractActor {
     // To track operations as StorageNode
     private final Map<OperationUid, Cancellable> lockTimers;
 
+    //  To store data from leaving node not yet committed
+    private final Map<OperationUid, Map<Integer, DataItem>> uncertainUpdates;
+
     public Node(
             int id,
             ApplicationConfig.Replication replicationParameters,
@@ -53,6 +57,7 @@ public class Node extends AbstractActor {
         this.coordinatorGuards = new HashSet<>();
         this.opCounter = 0;
         this.lockTimers = new HashMap<>();
+        this.uncertainUpdates = new HashMap<>();
     }
 
     static public Props props(
@@ -401,6 +406,8 @@ public class Node extends AbstractActor {
                 finishGetFail(operation, "TIMEOUT");
             } else if (operation.operationType.equals("JOIN")) {
                 finishJoinFail(operation.operationUid);
+            } else if (operation.operationType.equals("LEAVE")) {
+                finishLeaveFail(operation);
             }
 
         } else { // I am a node
@@ -702,9 +709,182 @@ public class Node extends AbstractActor {
         storage.clear();
         network.clear();
         // TODO write error msg
+
+        // delete the actor
+        context().stop(self());
     }
 
+    /**
+     * Any active node in the network can receive this.
+     * @param startLeaveMsg by NetworkManager
+     */
+    private void onStartLeaveMsg(Messages.StartLeaveMsg  startLeaveMsg) {
+        if (!network.containsKey(this.id)) {
+            // TODO write error msg -> NetworkManager send to wrong data
+            return;
+        }
 
+        if (network.size() <= replicationParameters.N) {
+            // TODO write error msg -> Cannot leave the network -> break replication constraint
+            return;
+        }
+
+        startHandingDataPhase();
+    }
+
+    /**
+     * Any node in the network can receive this.
+     * @param leaveWarningMsg by Leaving Node
+     */
+    private void onLeaveWarningMsg(Messages.LeaveWarningMsg leaveWarningMsg) {
+        // Save data in uncertain Updates
+        uncertainUpdates.put(leaveWarningMsg.leavingOperationUid, leaveWarningMsg.dataToSave);
+
+        // Send Acknowledgment
+        Messages.LeaveAckMsg ack = new Messages.LeaveAckMsg(leaveWarningMsg.leavingOperationUid, this.id);
+        sender().tell(ack, self());
+
+        // Should I have a timer?
+    }
+
+    /**
+     * Only the leaving node handles this.
+     * It could be a stale message.
+     * @param leaveAckMsg by nodes in the network that will store some data of the Leaving Node
+     */
+    private void onLeaveAckMsg(Messages.LeaveAckMsg leaveAckMsg) {
+        // Get leaving operation
+        final Operation leavingOperation = coordinatorOperations.get(leaveAckMsg.leavingOperationUid);
+
+        if (leavingOperation == null) {
+            return; // stale message
+        }
+
+        leavingOperation.quorumTracker.onOk(leaveAckMsg.senderKey);
+
+        // we don't have a busy case so we can only wait and timeout
+        if (leavingOperation.quorumTracker.hasQuorum()) {
+            finishLeaveSuccess(leavingOperation);
+        }
+    }
+
+    /**
+     * All active nodes in the network will handle this
+     * @param leaveCommitMsg by Leaving Node
+     */
+    private void onLeaveCommitMsg(Messages.LeaveCommitMsg leaveCommitMsg) {
+        // Check if there is still the operation? -> if not IT IS A BIG PROBLEM
+
+        // Remove the Leaving Node from the network
+        network.remove(leaveCommitMsg.leavingNodeKey);
+
+        // Commit uncertainUpdates
+        Map<Integer, DataItem> dataToSave = uncertainUpdates.get(leaveCommitMsg.leavingOperationUid);
+        if (dataToSave == null) {
+            // This is a strange case and should never happen
+            return;
+        }
+
+        // Prune non-responsible items on receive
+        List<Integer> itemsToDrop = computeItemsKeysToDrop();
+        for (Integer key : itemsToDrop) {
+            storage.remove(key);
+        };
+
+        // Save only the most recent version
+        for (Map.Entry<Integer, DataItem> entry : dataToSave.entrySet()) {
+            DataItem current = storage.get(entry.getKey());
+            if (current == null || current.getVersion() < entry.getValue().getVersion()) {
+                storage.put(entry.getKey(), entry.getValue());
+            }
+        }
+
+        // Remove the uncertain data
+        uncertainUpdates.remove(leaveCommitMsg.leavingOperationUid);
+    }
+
+    /**
+     * Upon the request to leave the network I need to send my data to the right nodes.
+     * Similar as we do for the reading we will send the list of what they have to update, however
+     * in this case we need to receive confirmation from all the nodes, otherwise we have to fail.
+     * This because if even one node is not answering it would mean that we might break the replication requirement
+     * (which happens if the busy node does not yet have that item) OR we might have older version of data
+     */
+    private void startHandingDataPhase() {
+        // create Leaving Operation
+        OperationUid operationUid = nextOperationUid();
+        Operation leavingOperation = new Operation(
+                -1,
+                new HashSet<>(),
+                -1,
+                getSender(),
+                "LEAVE",
+                null,
+                operationUid
+        );
+        coordinatorOperations.put(operationUid, leavingOperation);
+
+        final Map<Integer, Map<Integer, DataItem>> dataToAskPerNodeKey = new HashMap<>();
+        final NavigableMap<Integer, ActorRef> newRing = new TreeMap<>(network);
+        newRing.remove(this.id);
+
+        for (Map.Entry<Integer, DataItem> entry : storage.entrySet()) {
+            final Set<Integer> responsibleNodesKeys = getResponsibleNodesKeys(newRing, entry.getKey(), replicationParameters.N);
+
+            for (int nodeKey : responsibleNodesKeys) {
+                dataToAskPerNodeKey
+                        .computeIfAbsent(nodeKey, _ -> new HashMap<>())
+                        .put(entry.getKey(), entry.getValue());
+            }
+        }
+
+        leavingOperation.quorumTracker.setQuorumRequirements(
+                dataToAskPerNodeKey.keySet(),
+                dataToAskPerNodeKey.size()
+        );
+
+        for (Map.Entry<Integer, Map<Integer, DataItem>> entry : dataToAskPerNodeKey.entrySet()) {
+            Messages.LeaveWarningMsg leaveWarningMsg = new Messages.LeaveWarningMsg(
+                    operationUid,
+                    entry.getValue()
+            );
+
+            ActorRef node = network.get(entry.getKey());
+            node.tell(leaveWarningMsg, self());
+        }
+
+        // Start the timer
+        leavingOperation.timer = scheduleTimeout(replicationParameters.T, operationUid, -1);
+    }
+
+    private void finishLeaveSuccess(Operation leavingOperation) {
+        // Cancel the timer and remove the operation
+        if (leavingOperation.timer != null) {
+            leavingOperation.timer.cancel();
+        }
+        coordinatorOperations.remove(leavingOperation.operationUid);
+
+        // Remove myself from the network
+        network.remove(this.id);
+
+        Messages.LeaveCommitMsg leaveCommitMsg = new Messages.LeaveCommitMsg(
+                this.id,
+                leavingOperation.operationUid
+        );
+        multicastMessage(network.keySet(), leaveCommitMsg);
+
+        // clear all current information
+        network.clear();
+        storage.clear();
+        coordinatorOperations.clear();
+
+        // delete the actor
+        context().stop(self());
+    }
+
+    private void finishLeaveFail(Operation leavingOperation) {
+        coordinatorOperations.remove(leavingOperation.operationUid);
+    }
 
     /* ------------ HELPERS FUNCTIONS ------------ */
 
@@ -773,7 +953,7 @@ public class Node extends AbstractActor {
     }
 
     /**
-     * It is a dumb way to compute this O(network.size * storage), there are faster way
+     * It is a dumb way to compute this O(network.size * storage), there are faster ways
      * by computing the intervals for each data key
      * @param nodeKey of the joining node
      * @return a Map with the items the joining node will have to store
@@ -794,7 +974,7 @@ public class Node extends AbstractActor {
     }
 
     /**
-     * It is a dumb way to compute this O(network.size * storage), there are faster way
+     * It is a dumb way to compute this O(network.size * storage), there are faster ways
      * by computing the intervals for eachdata key
      * @return a List with the keys that the node is not responsible anymore
      */

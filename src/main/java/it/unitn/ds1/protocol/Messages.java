@@ -242,6 +242,40 @@ public class Messages {
         }
     }
 
+    public static class StartLeaveMsg implements Serializable {
+        public StartLeaveMsg() {}
+    }
+
+    public static class LeaveWarningMsg implements Serializable {
+        public final OperationUid leavingOperationUid;
+        public final Map<Integer, DataItem> dataToSave;
+
+        public LeaveWarningMsg(OperationUid leavingOperationUid, Map<Integer, DataItem> dataToSave) {
+            this.leavingOperationUid = leavingOperationUid;
+            this.dataToSave = Collections.unmodifiableMap(new TreeMap<>(dataToSave));
+        }
+    }
+
+    public static class LeaveAckMsg implements Serializable {
+        public final OperationUid leavingOperationUid;
+        public final int senderKey;
+
+        public LeaveAckMsg(OperationUid leavingOperationUid, int senderKey) {
+            this.leavingOperationUid = leavingOperationUid;
+            this.senderKey = senderKey;
+        }
+    }
+
+    public static class LeaveCommitMsg implements Serializable {
+        public final int leavingNodeKey;
+        public final OperationUid leavingOperationUid;
+
+        public LeaveCommitMsg(int leavingNodeKey, OperationUid leavingOperationUid) {
+            this.leavingNodeKey = leavingNodeKey;
+            this.leavingOperationUid = leavingOperationUid;
+        }
+    }
+
     public static class Error implements Serializable {
         public final int clientOperationNumber;
 
