@@ -89,7 +89,7 @@ public class Client extends AbstractActor {
 
     private void onUpdateResultMsg(Messages.UpdateResultMsg updateResultMsg) {
         System.out.printf(
-                "[Client %s] Update completed for key=%d -> value=\"%s\" (new version=%d)%n",
+                "[Client %s] Update completed for dataKey=%d -> value=\"%s\" (new version=%d)%n",
                 getSelf().path().name(), updateResultMsg.dataKey, updateResultMsg.value.getValue(), updateResultMsg.value.getVersion()
         );
         busy = false;
@@ -99,7 +99,7 @@ public class Client extends AbstractActor {
 
     private void onGetResultMsg(Messages.GetResultMsg getResultMsg) {
         System.out.printf(
-                "[Client %s] Get result: key=%d → value=\"%s\" (version=%d)%n",
+                "[Client %s] Get result: dataKey=%d → value=\"%s\" (version=%d)%n",
                 getSelf().path().name(), getResultMsg.dataKey, getResultMsg.value.getValue(), getResultMsg.value.getVersion()
         );
         busy = false;

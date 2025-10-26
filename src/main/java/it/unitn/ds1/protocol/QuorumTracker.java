@@ -6,8 +6,8 @@ import java.util.*;
 
 public class QuorumTracker {
     // TODO
-    public final Set<Integer> expected;   // usually all N replicas for the key
-    private final int requiredQuorum;
+    private Set<Integer> expected;   // usually all N replicas for the dataKey
+    private int requiredQuorum;
 
     private final Set<Integer> oks;
     private final Set<Integer> busy;
@@ -40,5 +40,11 @@ public class QuorumTracker {
     // How many votes are missing
     private int voteMissing() {
         return expected.size() - (oks.size() + busy.size());
+    }
+
+    // To allow joining operations
+    public void setQuorumRequirements(Set<Integer> expected, int requiredQuorum) {
+        this.expected = Set.copyOf(expected);
+        this.requiredQuorum = requiredQuorum;
     }
 }
