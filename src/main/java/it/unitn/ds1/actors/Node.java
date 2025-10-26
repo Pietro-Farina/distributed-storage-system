@@ -400,7 +400,7 @@ public class Node extends AbstractActor {
             } else if (operation.operationType.equals("GET")) {
                 finishGetFail(operation, "TIMEOUT");
             } else if (operation.operationType.equals("JOIN")) {
-                finishJoinFail();
+                finishJoinFail(operation.operationUid);
             }
 
         } else { // I am a node
@@ -466,7 +466,7 @@ public class Node extends AbstractActor {
     }
 
     /**
-     * Only joining nodes answer this
+     * Only joining node answer this
      * It could be a stale message
      * @param bootstrapResponseMsg from Bootstrap Node
      */
@@ -598,7 +598,7 @@ public class Node extends AbstractActor {
         if (joiningOperation.quorumTracker.hasQuorum()) {
             finishJoinSuccess(readDataResponseMsg.joiningOperationUid);
         } else {
-            finishJoinFail();
+            finishJoinFail(readDataResponseMsg.joiningOperationUid);
         }
     }
 
@@ -635,8 +635,6 @@ public class Node extends AbstractActor {
                 responseDataMsg.requestedData.size()
         );
 
-        final int successorNodeKey = getSuccessorNodeKey(this.id);
-
         // Create a per-item quorum
         for (Map.Entry<Integer, DataItem> item : responseDataMsg.requestedData.entrySet()) {
             // define the current responsible nodes for holding the key, note the joining node is not the network yet
@@ -657,7 +655,7 @@ public class Node extends AbstractActor {
             // We do not start the timer as there is already one for the joining
 
             // We already have the data of the successor node
-            perKeyReadOp.onOkResponse(successorNodeKey, item.getValue());
+            perKeyReadOp.onOkResponse(responseDataMsg.senderKey, item.getValue());
 
             // To avoid sending many different message we just send one for each node
             responsibleNodesKeys.remove(responseDataMsg.senderKey);  // don't ask the sender
@@ -682,6 +680,9 @@ public class Node extends AbstractActor {
 
     private void finishJoinSuccess(OperationUid joiningOperationUid) {
         // I want to save into the storage my most recent data -> Already done when reaching per-item quorum
+        Operation operation = coordinatorOperations.remove(joiningOperationUid);
+        if (operation != null && operation.timer != null)
+            operation.timer.cancel();
 
         // Multicast Here I am
         Messages.AnnounceNodeMsg nodeMsg = new Messages.AnnounceNodeMsg(this.id);
@@ -689,12 +690,13 @@ public class Node extends AbstractActor {
 
         // Add myself to the network
         network.put(this.id, self());
-
-        // Closing all Operations
-        coordinatorOperations.remove(joiningOperationUid);
     }
 
-    private void finishJoinFail() {
+    private void finishJoinFail(OperationUid joiningOperationUid) {
+        Operation operation = coordinatorOperations.remove(joiningOperationUid);
+        if (operation != null && operation.timer != null)
+            operation.timer.cancel();
+
         // Clear all maps and variables
         coordinatorOperations.clear();
         storage.clear();
