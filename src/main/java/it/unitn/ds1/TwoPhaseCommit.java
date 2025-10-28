@@ -363,32 +363,32 @@ public class TwoPhaseCommit {
       Boolean success = true;
 
 
-      // In coordinator hot path (tiny overhead)
-      logger.event(new LogModels.Event(
-              logger.runId(), reqId, selfNodeId,
-              "WRITE", key, null, "COORD_START", null, null
-      ));
+//      // In coordinator hot path (tiny overhead)
+//      logger.event(new LogModels.Event(
+//              logger.runId(), reqId, selfNodeId,
+//              "WRITE", key, null, "COORD_START", null, null
+//      ));
 
 // On replica ACK
-      logger.event(new LogModels.Event(
-              logger.runId(), reqId, "replicaId",
-              "REPLICA_ACK", key, version,
-              "APPLY_OK", latencyMs, success
-      ));
-
-      logger.event(new LogModels.Event(
-              logger.runId(), reqId, "replicaId",
-              "REPLICA_ACK", key, version,
-              "APPLY_OK", latencyMs, success
-      ));
-
-// On request completion → summary row
-      logger.summary(new LogModels.Summary(
-              "tsStartIso", "tsEndIso", reqId, selfNodeId, "WRITE", key, 4,
-              true, Long.getLong("1000"), "ownersStr", 4, 3, 3, 10
-      ));
-
-      logger.error("Coordinator failed", null);
+//      logger.event(new LogModels.Event(
+//              logger.runId(), reqId, "replicaId",
+//              "REPLICA_ACK", key, version,
+//              "APPLY_OK", latencyMs, success
+//      ));
+//
+//      logger.event(new LogModels.Event(
+//              logger.runId(), reqId, "replicaId",
+//              "REPLICA_ACK", key, version,
+//              "APPLY_OK", latencyMs, success
+//      ));
+//
+//// On request completion → summary row
+//      logger.summary(new LogModels.Summary(
+//              "tsStartIso", "tsEndIso", reqId, selfNodeId, "WRITE", key, 4,
+//              true, Long.getLong("1000"), "ownersStr", 4, 3, 3, 10
+//      ));
+//
+//      logger.error("Coordinator failed", null);
 
       logger.close(); // also auto-flushed by shutdown hook
 

@@ -8,8 +8,8 @@ public class LogModels {
         // TODO define better what to track: operation, version, phase, latency
         public final String ts;         // ISO timestamp when the event was logged
         public final String runId;      // ID of the experiment run (matches folder)
+        public final Integer nodeId;     // The actor or node generating the event
         public final String reqId;      // Unique request or operation identifier (not gonna used by nodes)
-        public final String nodeId;     // The actor or node generating the event
         public final String operation;  // Operation type TODO: define the type (e.g., WRITE, READ, REPLICA_ACK)
         public final Integer key;        // The key affected by the operation
         public final Integer version;    // Version number being written/read
@@ -17,13 +17,13 @@ public class LogModels {
         public final Long latencyMs;  // Duration of that phase or event TODO node start its timestamps and compute latency when before logging
         public final Boolean success;    // Whether the event completed successfully
 
-        public Event(String runId, String reqId, String nodeId,
+        public Event(String runId, Integer nodeId, String reqId,
                      String operation, Integer key, Integer version,
                      String phase, Long latencyMs, Boolean success) {
             this.ts = Instant.now().toString();
             this.runId = runId;
-            this.reqId = reqId;
             this.nodeId = nodeId;
+            this.reqId = reqId;
             this.operation = operation;
             this.key = key;
             this.version = version;
@@ -37,8 +37,8 @@ public class LogModels {
             b.append('{')
                     .append("\"ts\":").append(quote(ts)).append(',')
                     .append("\"runId\":").append(quote(runId)).append(',')
+                    .append("\"nodeId\":").append(nodeId==null?"null":nodeId).append(',')
                     .append("\"reqId\":").append(quote(reqId)).append(',')
-                    .append("\"coordinatorId\":").append(quote(nodeId)).append(',')
                     .append("\"operation\":").append(quote(operation)).append(',')
                     .append("\"key\":").append(key==null?"null":key).append(',')
                     .append("\"version\":").append(version==null?"null":version).append(',')
