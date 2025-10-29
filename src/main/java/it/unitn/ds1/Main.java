@@ -80,6 +80,25 @@ public class Main {
         networkManager.initializeNetwork(nodeKeysToAdd, dataToAdd, true);
         Thread.sleep(5000);
 
+        int nodeKey = nodeKeysToAdd.getFirst();
+        networkManager.addNode(200, nodeKey);
+
+        Thread.sleep(2000);
+        System.out.println(String.format("Adding node %d to network", 200));
+
+        networkManager.crashNode(200);
+
+        Thread.sleep(2000);
+        System.out.println(String.format("Crashing node %d to network", 200));
+
+        networkManager.recoverNode(200, nodeKey);
+
+        Thread.sleep(1000);
+        System.out.println(String.format("Recovering node %d to network", 200));
+
+        networkManager.removeNode(200);
+        System.out.println(String.format("Removing node %d from network", 200));
+
         networkManager.terminate();
     }
 }

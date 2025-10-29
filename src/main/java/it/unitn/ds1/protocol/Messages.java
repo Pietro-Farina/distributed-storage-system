@@ -321,4 +321,10 @@ public class Messages {
             this.dataKey = dataKey;
         }
     }
+
+    // ------------ HELPERS FOR HAVING UPDATED RING ON DATA MANAGER ------------ //
+    public static final class ManagerNotifyJoin  implements Serializable { public final int nodeKey; public ManagerNotifyJoin(int k){nodeKey = k;} }
+    public static final class ManagerNotifyLeave implements Serializable { public final int nodeKey; public ManagerNotifyLeave(int k){nodeKey = k;} }
+    public static final class ManagerNotifyCrash implements Serializable { public final int nodeKey; public ManagerNotifyCrash(int k){nodeKey = k;} }
+    public static final class ManagerNotifyRecover implements Serializable { public final int nodeKey; public ManagerNotifyRecover(int k){nodeKey = k;} }
 }

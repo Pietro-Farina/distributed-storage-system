@@ -107,7 +107,10 @@ public class Node extends AbstractActor {
         Operation operation = coordinatorOperations.get(updateResponseMsg.operationUid);
 
         // Stale message
-        if (operation == null) return;
+        if (operation == null) {
+            logEvent(new Outcome(updateResponseMsg.operationUid.toString(), "UPDATE", updateResponseMsg.key, -1, "RESPONSE", false));
+            return;
+        }
 
         final int senderNodeKey = updateResponseMsg.senderKey;
 
@@ -117,14 +120,17 @@ public class Node extends AbstractActor {
             operation.onOkResponse(senderNodeKey, updateResponseMsg.value);
         }
 
-        if (!operation.quorumTracker.done()) return;
+        if (!operation.quorumTracker.done()) {
+            logEvent(new Outcome(updateResponseMsg.operationUid.toString(), "UPDATE", updateResponseMsg.key, -1, "RESPONSE", true));
+            return;
+        }
 
         Outcome e;
         if (operation.quorumTracker.hasQuorum()) {
             e = finishUpdateSuccess(operation);
         } else {
             finishUpdateFail(operation, "NO QUORUM");
-            e = new Outcome(operation.operationUid.toString(), "UPDATE", operation.dataKey, -1, "RESPONSE", false);
+            e = new Outcome(updateResponseMsg.operationUid.toString(), "UPDATE", updateResponseMsg.key, -1, "RESPONSE_FINISHED", false);
         }
         logEvent(e);
     }
@@ -297,7 +303,7 @@ public class Node extends AbstractActor {
 
         // cleanup: free locks and cancel timer
         cleanup(operation);
-        return new Outcome(operation.operationUid.toString(), "UPDATE", operation.dataKey, committedDataItem.getVersion(), "TODO", true);
+        return new Outcome(operation.operationUid.toString(), "UPDATE", operation.dataKey, committedDataItem.getVersion(), "RESPONSE_FINISHED", true);
     }
 
     private void finishUpdateFail(Operation operation, String reason) {
@@ -717,11 +723,11 @@ public class Node extends AbstractActor {
     }
 
     /**
-     * Start the reading phase of the joining operation.
+     * Start the reading phase of the joining/recovering operation.
      * It creates for each item to store a reading r-quorum operation. If any fails the join fails
      * It is little expensive -> O(requestedData.size() * network.size()) however we request and receive only the
      * data we actually need from each node.
-     * @param responseDataMsg from the Successor Node of the Joining Node
+     * @param responseDataMsg from the Successor Node of the Joining/Recovering Node
      */
     private void startReadingPhase(Messages.ResponseDataMsg responseDataMsg) {;
         final Map<Integer, List<KeyOperationRef>> dataToAskPerNodeKey = new HashMap<>();
@@ -737,7 +743,15 @@ public class Node extends AbstractActor {
         // Create a per-item quorum
         for (Map.Entry<Integer, DataItem> item : responseDataMsg.requestedData.entrySet()) {
             // define the current responsible nodes for holding the key, note the joining node is not the network yet
-            final Set<Integer> responsibleNodesKeys = getResponsibleNodesKeys(network, item.getKey(), replicationParameters.N);
+            // The recovering node instead is already in the network -> we need to remove it before
+            NavigableMap<Integer, ActorRef> ring = this.network;
+            if (joiningOperation.operationType.equals("RECOVER")) {
+                ring = new TreeMap<>(this.network);
+                ring.remove(this.id);
+            }
+            final Set<Integer> responsibleNodesKeys = joiningOperation.operationType.equals("JOIN") ?
+                    getResponsibleNodesKeys(network, item.getKey(), replicationParameters.N) :
+                    getResponsibleNodesKeys(ring, item.getKey(), replicationParameters.N);
 
             // Create the dedicated operation
             final OperationUid perKeyReadOpUid = nextOperationUid();
@@ -1046,9 +1060,11 @@ public class Node extends AbstractActor {
     }
 
     private void onCrashMsg(Messages.CrashMsg crashMsg) {
+        OperationUid operationUid = nextOperationUid();
         // this node become unavailable
         getContext().become(crashed());
-        logEvent(new Outcome(nextOperationUid().toString(), "CRASH", -1, -1, "CRASHED", true));
+        onEndOperation(operationUid,  "CRASH",  -1, true, -1);
+        logEvent(new Outcome(operationUid.toString(), "CRASH", -1, -1, "CRASHED", true));
     }
 
     /* ------------ HELPERS FUNCTIONS ------------ */
@@ -1110,8 +1126,8 @@ public class Node extends AbstractActor {
         return responsibleNodesKeys;
     }
 
-    private int getSuccessorNodeKey(int key) {
-        Integer cur = network.ceilingKey(key);
+    private int getSuccessorNodeKey(int nodeKey) {
+        Integer cur = network.higherKey(nodeKey);
         if (cur == null) cur = network.firstKey();
 
         return cur;
@@ -1167,7 +1183,7 @@ public class Node extends AbstractActor {
         startTimes.put(operationUid, System.nanoTime());
     }
     private void onEndOperation(OperationUid operationUid, String operationType, int dataKey, boolean success, int chosenVersion) {
-        long startTime = this.startTimes.remove(operationUid);
+        long startTime = startTimes.getOrDefault(operationUid, System.nanoTime());
         long endTime = System.nanoTime();
         var s = new LogModels.Summary(
                 Instant.ofEpochMilli(startTime/1_000_000).toString(),
@@ -1183,6 +1199,18 @@ public class Node extends AbstractActor {
                 replicationParameters.N, replicationParameters.R, replicationParameters.W, replicationParameters.T
         );
         logger.summary(s);
+        // ------ NOTIFY THE MANAGER ----------------------------------------------------------- //
+        if (success) {
+            if (operationType.equals("JOIN")) {
+                getContext().actorSelection("/user/networkManagerInbox").tell(
+                        new Messages.ManagerNotifyJoin(this.id), self());
+            }
+            else if (operationType.equals("LEAVE")) {
+                getContext().actorSelection("/user/networkManagerInbox").tell(
+                        new Messages.ManagerNotifyLeave(this.id), self());
+            }
+        }
+        // ------------------------------------------------------------------------------------- //
     }
     private class Outcome {
         public final String operationUid;
