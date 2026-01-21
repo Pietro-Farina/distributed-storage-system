@@ -14,7 +14,6 @@ import scala.PartialFunction;
 import scala.concurrent.duration.Duration;
 import scala.runtime.BoxedUnit;
 
-import javax.xml.crypto.Data;
 import java.io.Serializable;
 import java.time.Instant;
 import java.util.*;
@@ -556,7 +555,7 @@ public class Node extends AbstractActor {
         final int successorKey = getSuccessorNodeKey(this.id);
         ActorRef successorNode = network.get(successorKey);
 
-        // Request the node I will have to store to the following node in the ring
+        // Request the data I will have to store from the following node in the ring
         Messages.RequestDataMsg requestMsg = new Messages.RequestDataMsg(
                 bootstrapResponseMsg.joiningOperationUid,
                 this.id,
@@ -1104,11 +1103,18 @@ public class Node extends AbstractActor {
         }
     }
 
-    private Set<Integer> getResponsibleNodesKeys(NavigableMap<Integer, ActorRef> network, int dataKey, int subsetSize){
+    /**
+     * Given a network, the replication factor and the target data key. Computes which node need to store the data item.
+     * @param network
+     * @param dataKey
+     * @param replicationFactor
+     * @return Set <Integer>: keys of responsible nodes
+     */
+    private Set<Integer> getResponsibleNodesKeys(NavigableMap<Integer, ActorRef> network, int dataKey, int replicationFactor){
         int N;
         if (network.isEmpty()) return Set.of();
         int size = network.size();
-        N = Math.min(size, subsetSize);
+        N = Math.min(size, replicationFactor);
 
         Set<Integer> responsibleNodesKeys = new HashSet<>();
 
@@ -1133,19 +1139,63 @@ public class Node extends AbstractActor {
         return cur;
     }
 
+    /**
+     * Get the intervals for which the given node is responsible to store replicas. Handle wrap-around value.
+     * @param nodeKey
+     * @param replicationFactor
+     * @param ring
+     * @return List <Interval>
+     */
+    private List<Interval> computeResponsibilityIntervals(int nodeKey, int replicationFactor, NavigableMap<Integer, ActorRef> ring) {
+        // get effective replication size to avoid indexing problems
+        int size = ring.size();
+        int N = Math.min(size, replicationFactor); // effective replication
+
+        // get index of joining node
+        List <Integer> sortedIds = new ArrayList<>(ring.keySet()); // keySet returns in ascending order
+        int idx = sortedIds.indexOf(nodeKey);
+
+        // Compute the node's N predecessor intervals: each is (pred_i, pred_{i-1}]
+        // In practice we get all the intervals between nodes for which the node is responsible
+        List <Interval> intervals = new ArrayList<>(N);
+        int prev = nodeKey;
+        for (int i = 0 ; i < N ; i++) {
+            int pred =  sortedIds.get((idx -i - 1 + size) % size);
+            intervals.add(new Interval(pred, prev)); // Interval: (pred, prev]
+            prev = pred;
+        }
+        return intervals;
+    }
+
+    /**
+     * Compute the items that a given node need to store
+     * @param nodeKey
+     * @param ring
+     * @return Map<Integer, DataItem>
+     */
     private Map<Integer, DataItem> computeItemsForNode(int nodeKey, NavigableMap<Integer, ActorRef> ring) {
         final Map<Integer, DataItem> map = new HashMap<>();
-        for (var e : storage.entrySet()) {
-            if (getResponsibleNodesKeys(ring, e.getKey(), replicationParameters.N).contains(nodeKey)) {
-                map.put(e.getKey(), e.getValue());
+
+        // Compute the node's N predecessor intervals: each is (pred_i, pred_{i-1}]
+        // In practice we get all the intervals for which the node is responsible
+        List<Interval> intervals = computeResponsibilityIntervals(nodeKey, replicationParameters.N, ring);
+
+        // Collect keys in any of these intervals
+        for (Map.Entry<Integer, DataItem> entry : storage.entrySet()) {
+            int key =  entry.getKey();
+            for (Interval interval : intervals) {
+                if (interval.contains(key)) { // if the joining node is responsible than add it
+                    map.put(key, entry.getValue());
+                    break;
+                }
             }
         }
         return map;
     }
 
     /**
-     * It is a dumb way to compute this O(network.size * storage), there are faster ways
-     * by computing the intervals for each data key
+     * Compute the items the joining node need to store
+     * Computation cost O(N * storage.size())
      * @param nodeKey of the joining node
      * @return a Map with the items the joining node will have to store
      */
@@ -1153,19 +1203,27 @@ public class Node extends AbstractActor {
         // Simulate the new ring
         final NavigableMap<Integer, ActorRef> newRing = new TreeMap<>(network);
         newRing.put(nodeKey, null);
+
         return computeItemsForNode(nodeKey, newRing);
     }
 
     /**
-     * It is a dumb way to compute this O(network.size * storage), there are faster ways
-     * by computing the intervals for eachdata key
-     * @return a List with the keys that the node is not responsible anymore
+     * Compute the items the current node can drop
+     * Computation cost O(N * storage.size())
+     * @return a List with the keys for which the node is not responsible anymore
      */
     private List<Integer> computeItemsKeysToDrop() {
         final List<Integer> itemsToDrop = new ArrayList<>();
+
+        // Get responsibility intervals for the current node
+        List<Interval> intervals = computeResponsibilityIntervals(this.id, replicationParameters.N, network);
         for (Map.Entry<Integer, DataItem> entry : storage.entrySet()) {
-            if (!getResponsibleNodesKeys(network, entry.getKey(), replicationParameters.N).contains(this.id)) {
-                itemsToDrop.add(entry.getKey());
+            int key =  entry.getKey();
+            for (Interval interval : intervals) {
+                if (!interval.contains(key)) { // if the node is not responsible anymore drop the key
+                    itemsToDrop.add(key);
+                    break;
+                }
             }
         }
         return itemsToDrop;
@@ -1176,6 +1234,26 @@ public class Node extends AbstractActor {
                 "[Node %s] %s Operation for nodeKey=%d  failed: %s%n",
                 getSelf().path().name(), operationType, nodeKey, reason
         );
+    }
+
+    /**
+     * Helper interval class with wrap-around handling
+     */
+    private static class Interval {
+        final int startExclusive, endExclusive;
+
+        Interval(int startExclusive, int endExclusive) {
+            this.startExclusive = startExclusive;
+            this.endExclusive = endExclusive;
+        }
+
+        boolean contains(int key) {
+            if (startExclusive < endExclusive) {
+                return key > startExclusive && key <= endExclusive;
+            } else { // wrap-around
+                return key > startExclusive || key <= endExclusive;
+            }
+        }
     }
 
     // -------------- HELPER FUNCTION FOR LOGGING -------------- //
