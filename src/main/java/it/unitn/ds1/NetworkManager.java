@@ -11,6 +11,7 @@ import java.util.*;
 public class NetworkManager {
     private final ActorSystem system;
     public final NavigableMap<Integer, ActorRef> network;
+    public final Set<Integer> crashedNodes;
     public final Map<String, ActorRef> clients;
     private final ActorRef inbox;
     private Boolean initialized;
@@ -21,6 +22,7 @@ public class NetworkManager {
     public NetworkManager(ApplicationConfig parameters) {
         system = ActorSystem.create("distributed-storage-system");
         network = new TreeMap<>();
+        crashedNodes = new HashSet<>();
         clients = new TreeMap<>();
         this.parameters = parameters;
         this.inbox = system.actorOf(ManagerInbox.props(this), "networkManagerInbox");
@@ -144,6 +146,13 @@ public class NetworkManager {
             );
             return;
         }
+        if (crashedNodes.contains(nodeKey)) {
+            System.out.printf(
+                    "[Network Manager] %s Operation for nodeKey=%d failed: %s%n",
+                    "RECOVER", nodeKey, "node already crashed"
+            );
+            return;
+        }
         ActorRef node = network.get(nodeKey);
         node.tell(new Messages.CrashMsg(), ActorRef.noSender());
     }
@@ -160,6 +169,13 @@ public class NetworkManager {
             System.out.printf(
                     "[Network Manager] %s Operation for nodeKey=%d failed: %s%n",
                     "RECOVER", nodeKey, "node not in network"
+            );
+            return;
+        }
+        if (!crashedNodes.contains(nodeKey)) {
+            System.out.printf(
+                    "[Network Manager] %s Operation for nodeKey=%d failed: %s%n",
+                    "RECOVER", nodeKey, "node not crashed"
             );
             return;
         }
@@ -297,10 +313,18 @@ public class NetworkManager {
      */
 
     // called only by the inbox actor (single-threaded), but keep synchronized for safety
-    synchronized void onJoin(int key, ActorRef ref) { network.put(key, ref); }
-    synchronized void onLeave(int key) { network.remove(key); }
-    synchronized void onCrash(int key) { /* keep membership; optionally track a status map */ }
-    synchronized void onRecover(int key, ActorRef ref) { network.put(key, ref); }
+    synchronized void onJoin(int key, ActorRef ref) {
+        network.put(key, ref);
+    }
+    synchronized void onLeave(int key) {
+        network.remove(key);
+    }
+    synchronized void onCrash(int key) {
+        crashedNodes.add(key);
+    }
+    synchronized void onRecover(int key, ActorRef ref) {
+        crashedNodes.remove(key);
+    }
 
     // for your helpers/UI/tests
     public synchronized NavigableMap<Integer, ActorRef> snapshot(){ return new TreeMap<>(network); }

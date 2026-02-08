@@ -1,16 +1,23 @@
 package it.unitn.ds1.actors;
 
 import akka.actor.AbstractActor;
+import akka.actor.ActorRef;
+import akka.actor.Cancellable;
 import akka.actor.Props;
 import it.unitn.ds1.logging.AsyncRunLogger;
 import it.unitn.ds1.logging.LogModels;
 import it.unitn.ds1.protocol.Messages;
 import it.unitn.ds1.utils.ApplicationConfig;
 import it.unitn.ds1.utils.OperationUid;
+import scala.concurrent.duration.Duration;
 
+import java.io.Serializable;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 
 /*
     The clients execute commands passed through messages, print the reply from the
@@ -21,6 +28,9 @@ public class Client extends AbstractActor {
     private ApplicationConfig.Delays delaysParameters;
     private int opCounter;
     private boolean busy;
+
+    // To avoid locking when contacting a crashed node
+    private Cancellable operationTimer;
 
     // The following is used to enhanced simulation, to allows the networkManager
     // to quickly queue operations to client
@@ -67,10 +77,10 @@ public class Client extends AbstractActor {
                 startUpdateMsg.dataKey,
                 startUpdateMsg.value
         );
-        startUpdateMsg.node.tell(requestMsg, getSelf());
+        sendNetworkDelayedMessage(getSelf(), startUpdateMsg.node, requestMsg);
 
-        // I DON'T PUT TIMEOUT BECAUSE WE ARE UNDER ASSUMPTIONS OF RELIABLE NETWORK
-        // Otherwise we would have a timeout to avoid being indefinitely busy
+        // I PUT TIMEOUT DUE TO POSSIBILITY TO CONTACT CRASHED NODE
+        operationTimer = scheduleTimeout();
     }
 
     /**
@@ -94,13 +104,15 @@ public class Client extends AbstractActor {
         Messages.GetRequestMsg requestMsg = new Messages.GetRequestMsg(
                 startGetMsg.dataKey
         );
-        startGetMsg.node.tell(requestMsg, getSelf());
+        sendNetworkDelayedMessage(getSelf(), startGetMsg.node, requestMsg);
 
-        // I DON'T PUT TIMEOUT BECAUSE WE ARE UNDER ASSUMPTIONS OF RELIABLE NETWORK
-        // Otherwise we would have a timeout to avoid being indefinitely busy
+        // I PUT TIMEOUT DUE TO POSSIBILITY TO CONTACT CRASHED NODE
+        operationTimer = scheduleTimeout();
     }
 
     private void onUpdateResultMsg(Messages.UpdateResultMsg updateResultMsg) {
+        operationTimer.cancel();
+
         System.out.printf(
                 "[Client %s] Update completed for dataKey=%d -> value=\"%s\" (new version=%d)%n",
                 getSelf().path().name(), updateResultMsg.dataKey, updateResultMsg.value.getValue(), updateResultMsg.value.getVersion()
@@ -112,6 +124,8 @@ public class Client extends AbstractActor {
     }
 
     private void onGetResultMsg(Messages.GetResultMsg getResultMsg) {
+        operationTimer.cancel();
+
         System.out.printf(
                 "[Client %s] Get result: dataKey=%d -> value=\"%s\" (version=%d)%n",
                 getSelf().path().name(), getResultMsg.dataKey, getResultMsg.value.getValue(), getResultMsg.value.getVersion()
@@ -123,6 +137,8 @@ public class Client extends AbstractActor {
     }
 
     private void onErrorMsg(Messages.ErrorMsg errorMsg) {
+        operationTimer.cancel();
+
         System.out.printf(
                 "[Client %s] Operation failed: %s%n",
                 getSelf().path().name(), errorMsg.reason
@@ -131,6 +147,18 @@ public class Client extends AbstractActor {
         busy = false;
 
         processNextIfIdle();
+    }
+
+    private void onTimeout(ClientTimeout timeout) {
+        // stale timeout -> can happen if it fires as we cancel it
+        if (!busy) {
+            return;
+        }
+
+        System.out.printf(
+                "[Client %s] TIMEOUT! Coordinator did not respond.%n",
+                getSelf().path().name()
+        );
     }
 
     // Always enqueue (for simulation purposes)
@@ -175,6 +203,40 @@ public class Client extends AbstractActor {
         }
     }
 
+    private Cancellable scheduleTimeout() {
+        // Avoid to fire
+        if (operationTimer!= null && !operationTimer.isCancelled()) {
+            operationTimer.cancel();
+        }
+        final long safetyTimeForExecution = 1000L;
+        final long timeoutTime = replicationParameters.T + (delaysParameters.delayMaxMs * 2) + safetyTimeForExecution;
+        return getContext().system().scheduler().scheduleOnce(
+                Duration.create(timeoutTime, TimeUnit.MILLISECONDS),
+                getSelf(),
+                new ClientTimeout(),
+                getContext().system().dispatcher(),
+                getSelf());
+    }
+
+    private class ClientTimeout implements Serializable {}
+
+    /**
+     * Send message with network delays
+     * @param sender
+     * @param receiver
+     * @param message
+     */
+    private void sendNetworkDelayedMessage(ActorRef sender, ActorRef receiver, Serializable message) {
+        long delayMs = ThreadLocalRandom.current().nextLong(delaysParameters.delayMinMs, delaysParameters.delayMaxMs);
+        getContext().system().scheduler().scheduleOnce(
+                Duration.create(delayMs, TimeUnit.MILLISECONDS),
+                receiver,
+                message,
+                getContext().system().dispatcher(),
+                sender
+        );
+    }
+
     // -------------- HELPER FUNCTION FOR LOGGING -------------- //
     private void onStartOperation() {
         this.startTime = System.nanoTime();
@@ -212,6 +274,7 @@ public class Client extends AbstractActor {
                 .match(Messages.UpdateResultMsg.class, this::onUpdateResultMsg)
                 .match(Messages.GetResultMsg.class, this::onGetResultMsg)
                 .match(Messages.ErrorMsg.class, this::onErrorMsg)
+                .match(ClientTimeout.class, this::onTimeout)
                 .build();
     }
 }
