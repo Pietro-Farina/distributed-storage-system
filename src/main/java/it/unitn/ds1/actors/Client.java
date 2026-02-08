@@ -155,6 +155,9 @@ public class Client extends AbstractActor {
             return;
         }
 
+        // release
+        busy = false;
+
         System.out.printf(
                 "[Client %s] TIMEOUT! Coordinator did not respond.%n",
                 getSelf().path().name()
