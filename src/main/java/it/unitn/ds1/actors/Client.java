@@ -140,8 +140,8 @@ public class Client extends AbstractActor {
         operationTimer.cancel();
 
         System.out.printf(
-                "[Client %s] Operation failed: %s%n",
-                getSelf().path().name(), errorMsg.reason
+                "[Client %s] Operation failed on data key %d: %s%n",
+                getSelf().path().name(), errorMsg.dataKey, errorMsg.reason
         );
         onEndOperation(errorMsg.operationUid, errorMsg.operationType, errorMsg.dataKey, false, -1);
         busy = false;

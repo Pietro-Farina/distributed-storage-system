@@ -1,0 +1,67 @@
+########################################
+# TEST CASE 2 — Multi-client hot keys + join/leave boundaries (different coordinators)
+# Goal: show many clients hitting same nodes, then a join triggers repartition (only when idle), then clients resume and read/write across old/new responsible sets.
+########################################
+
+sleep 200
+
+# ---- network ----
+
+init 10 20 30 40
+sleep 600
+
+# ---- clients ----
+
+client create a
+client create b
+client create c
+client create d
+sleep 200
+
+# ---- phase A: workload to same coordinators but different keys ----
+# Keys chosen to land around different ring regions; coordinators intentionally mixed.
+
+client update a 12 A12 10
+client update b 12 B12 20
+client update c 27 C27 20
+client update d 27 D27 30
+sleep 700
+
+# Cross-check reads from different nodes (not necessarily responsible) to exercise forwarding/coordinator logic.
+
+client get a 12 40
+client get b 12 30
+client get c 27 10
+client get d 27 40
+sleep 700
+
+# ---- phase B: ensure idle, then JOIN ----
+# Join must occur when no ongoing ops (per assignment assumption). This sleep is the “idle barrier”.
+
+sleep 1000
+node join 25 10
+sleep 1000
+
+# ---- phase C: post-join writes on keys near new node position to force repartition impact ----
+
+client update a 23 A23 25
+client update b 26 B26 10
+sleep 700
+
+# Reads from various coordinators to ensure updated placement + correct versions after repartition.
+
+client get c 23 20
+client get d 26 30
+sleep 700
+
+# ---- phase D: LEAVE + continued ops with multiple clients ----
+
+sleep 1000
+node leave 40
+sleep 1000
+
+# After leave, keep reading/writing same keys from different coordinators.
+
+client update c 12 C12_2 30
+client get d 12 10
+sleep 700

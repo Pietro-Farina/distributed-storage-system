@@ -1,0 +1,64 @@
+########################################
+# TEST CASE 1 — Contention on same key (multi-client, same coordinators)
+# Goal: show concurrent requests on same item, coordinator serialization, and
+# sequential-consistency-safe behavior (either success order or rejection/timeout).
+########################################
+
+sleep 200
+
+# ---- network ----
+
+init 10 20 30
+sleep 500
+
+# ---- clients ----
+
+client create c1
+client create c2
+client create c3
+sleep 200
+
+# ---- phase A: two clients update SAME key via SAME coordinator (node 10) ----
+# Expectation: one update wins first; the other is either queued or rejected (depending on your conflict policy).
+
+client update c1 35 v1 10
+client update c2 35 v2 10
+sleep 600
+
+# Read from different coordinators; all must converge to the same latest value/version.
+
+client get c3 35 20
+client get c1 35 30
+sleep 500
+
+# ---- phase B: overlapping read with write on same key ----
+# Expectation: read is either delayed/rejected to preserve sequential consistency, or returns either old/new but never violates monotonic reads per client.
+
+client get c2 35 10
+client update c1 35 v3 10
+sleep 1000
+
+# Client c2 reads again from a different coordinator; must not observe a value older than its previous successful read.
+
+client get c2 35 30
+sleep 1000
+
+# ---- phase C: crash one replica, continue operations (must still satisfy quorum if possible) ----
+
+node crash 20
+sleep 1000
+
+# Continue write/read through a coordinator that can still reach quorum.
+
+client update c3 35 v4 10
+sleep 600
+client get c1 35 30
+sleep 1000
+
+# Recover crashed node and verify reads still return latest.
+
+node recover 20 10
+sleep 1000
+client get c3 35 20
+sleep 1000
+exit
